@@ -267,7 +267,7 @@ class DiffusionModel(pl.LightningModule):
         self.outc = OutConv(64, img_depth)
         self.sa1 = SAWrapper(128, 8)
         self.sa2 = SAWrapper(256, 4)
-        self.sa3 = SAWrapper(256, 2)
+        self.sa3 = SAWrapper(128, 4)
 
     def pos_encoding(self, t, channels, embed_size):
         inv_freq = 1.0 / (
@@ -291,8 +291,8 @@ class DiffusionModel(pl.LightningModule):
         x4 = self.sa2(x4)
         x5 = self.down4(x4) + self.pos_encoding(t, 256, 2)
         #print(x.shape, x1.shape, x2.shape, x3.shape, x4.shape, x5.shape, x6.shape)
-        x = self.sa3(x5)
-        x = self.up2(x, x4) + self.pos_encoding(t, 128, 4)
+        x = self.up2(x5, x4) + self.pos_encoding(t, 128, 4)
+        x = self.sa3(x)
         x = self.up3(x, x3) + self.pos_encoding(t, 128, 8)
         x = self.up4(x, x2) + self.pos_encoding(t, 128, 16)
         #print(x.shape, x1.shape)
