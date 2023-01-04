@@ -5,8 +5,9 @@ from torchvision import transforms
 import numpy as np
 
 class ImageDataset(Dataset):
-    def __init__(self, images_path):
+    def __init__(self, images_path, latent_path):
         self.images_data = np.load(images_path, mmap_mode='r')
+        self.latent_data = np.load(latent_path, mmap_mode='r')
         self.total_sequences = self.images_data.shape[0]
         self.dataset_len = self.total_sequences
         self.depth = self.images_data.shape[1]
@@ -14,7 +15,7 @@ class ImageDataset(Dataset):
         print(self.total_sequences, self.dataset_len, self.depth, self.size)
 
     def __getitem__(self, index):
-        return torch.clamp(((torch.from_numpy(self.images_data[index].copy()).type(torch.FloatTensor) / 255.0) - 0.5) * 2.0, -1.0, 1.0)
+        return torch.clamp(((torch.from_numpy(self.images_data[index].copy()).type(torch.FloatTensor) / 255.0) - 0.5) * 2.0, -1.0, 1.0), torch.from_numpy(self.latent_data[index].copy()).type(torch.FloatTensor)
 
     def __len__(self):
         return self.total_sequences

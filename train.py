@@ -1,18 +1,23 @@
 import torch
 from data import DiffSet, ImageDataset
 import pytorch_lightning as pl
-from model import AutoencoderModel
+from model import AutoencoderKL, DiffusionModel
 from torch.utils.data import DataLoader
 import imageio
 import glob
 from pytorch_lightning.utilities.cli import LightningCLI
+import yaml
 
 # Training hyperparameters
-dataset_choice = "BerkeleyDeepDrive"
-dataset_path_train = "/work/cseos2g/papapalpi/data/train_float_128x128.npy"
-dataset_path_val = "/work/cseos2g/papapalpi/data/val_float_128x128.npy"
+dataset_choice = "AutoencoderBoosted"
+base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
+dataset_path_train = base_dir + "data/train_float_128x128.npy"
+dataset_path_val = base_dir + "data/val_float_128x128.npy"
+latent_dataset_path_train =  base_dir + "data/train_float_128x128_latent.npy"
+latent_dataset_path_val =  base_dir + "data/val_float_128x128_latent.npy"
 max_epoch = 10
 batch_size = 16
+config_data = yaml.safe_load(open("autoencoder_kl_64x64x3.yaml"))
 
 # Loading parameters
 load_model = False
@@ -30,19 +35,18 @@ if load_model:
 
 
 # Create datasets and data loaders
-train_dataset = ImageDataset(dataset_path_train)
-val_dataset = ImageDataset(dataset_path_val)
+train_dataset = ImageDataset(dataset_path_train, latent_dataset_path_train)
+val_dataset = ImageDataset(dataset_path_val, latent_dataset_path_val)
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=8, num_workers=4, shuffle=False)
 
-# Create model and trainer
-if load_model:
-    model = AutoencoderModel.load_from_checkpoint(last_checkpoint, in_size=train_dataset.size*train_dataset.size, in_size_sqrt=train_dataset.size, img_depth=train_dataset.depth)
-else:
-    print(train_dataset.size, train_dataset.depth)
-    print("Depth printed!")
-    model = AutoencoderModel(train_dataset.size*train_dataset.size, train_dataset.size, train_dataset.depth)
+autoencoder_model = AutoencoderKL.load_from_checkpoint("autoencoderkl.ckpt", ddconfig=config_data['model']['params']['ddconfig'],
+                 lossconfig=config_data['model']['params']['lossconfig'],
+                 embed_dim=config_data['model']['params']['embed_dim'],
+                 base_learning_rate=config_data['model']['base_learning_rate'])
+
+model = DiffusionModel(autoencoder_model=autoencoder_model, in_size=32*32, in_size_sqrt=32, t_range=1000, img_depth=train_dataset.depth, train_dataset=train_dataset)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(
@@ -73,7 +77,7 @@ class ImageDataModule(pl.LightningDataModule):
         return val_loader
 
 cli = LightningCLI(
-        description="PyTorch VAE-GAN Model Training",
+        description="PyTorch Diffusiom Model with Autoencoder Boost",
         model_class=getModel,
         datamodule_class=ImageDataModule,
         seed_everything_default=123,

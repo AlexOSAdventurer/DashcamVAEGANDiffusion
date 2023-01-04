@@ -2,261 +2,208 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 import math
+import sys
 import torchgan
 import numpy as np
 from torch.autograd import Variable
 from torch.autograd import grad as torch_grad
+import torch.nn.functional as F
+from contextlib import contextmanager
+from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 
-class DiagonalGaussianDistribution(object):
-    def __init__(self, parameters, deterministic=False):
-        self.parameters = parameters
-        self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
-        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
-        self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
+from ldm.modules.diffusionmodules.model import Encoder, Decoder
+from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
-    def sample(self):
-        x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
-        return x
+from ldm.util import instantiate_from_config
 
-    def kl(self, other=None):
-        if self.deterministic:
-            return torch.Tensor([0.])
-        else:
-            if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2)
-                                       + self.var - 1.0 - self.logvar,
-                                       dim=[1, 2, 3])
-            else:
-                return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean, 2) / other.var
-                    + self.var / other.var - 1.0 - self.logvar + other.logvar,
-                    dim=[1, 2, 3])
 
-    def nll(self, sample, dims=[1,2,3]):
-        if self.deterministic:
-            return torch.Tensor([0.])
-        logtwopi = np.log(2.0 * np.pi)
-        return 0.5 * torch.sum(
-            logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-            dim=dims)
-
-    def mode(self):
-        return self.mean
-
-blocks = [2, 2, 2, 2]
-block_outdim = [64, 128, 256, 3]
-zDim=block_outdim[-1]
-
-def residualBlockDownFullDisc(channelIn, channelOut, blocks=3, downsample=2):
-    layers = []
-    for i in range(blocks):
-        filters = [channelIn, channelOut, channelOut] if (i == 0) else [channelOut, channelOut, channelOut]
-        kernels = [3, 3]
-        strides = [downsample, 1] if (i == 0) else [1, 1]
-        paddings = [1, 1]
-        shortcut = nn.Conv2d(channelIn, channelOut, kernel_size=1, stride=downsample, bias=False) if (i == 0) else nn.Identity()
-        layer = torchgan.layers.ResidualBlock2d(filters=filters, kernels=kernels, strides=strides, paddings=paddings, 
-                                           nonlinearity=nn.LeakyReLU(0.2), batchnorm=False, 
-                                           shortcut=shortcut, 
-                                           last_nonlinearity=nn.LeakyReLU(0.2))
-        layers = layers + [layer]
-    return nn.Sequential(*layers)
-
-class VAE_Discriminator(nn.Module):
-    def __init__(self, zDim=zDim):
-        super(VAE_Discriminator, self).__init__()
-        discriminationOutputFeatures = 128
-        
-        self.residualBlock1 = residualBlockDownFullDisc(3, block_outdim[0], blocks=blocks[0], downsample=2) #256x32x32
-        self.residualBlock2 = residualBlockDownFullDisc(block_outdim[0], block_outdim[1], blocks=blocks[1], downsample=2) #512x16x16
-        self.residualBlock3 = residualBlockDownFullDisc(block_outdim[1], block_outdim[2], blocks=blocks[2], downsample=2) #1024x8x8
-        self.residualBlock4 = nn.Sequential(residualBlockDownFullDisc(block_outdim[2], block_outdim[3], blocks=blocks[3], downsample=2), nn.AdaptiveAvgPool2d((1,1)), nn.Flatten())
-        
-        self.blockSequence = torch.nn.Sequential(self.residualBlock1, self.residualBlock2, self.residualBlock3, self.residualBlock4)
-        self.encFC = nn.Linear(block_outdim[-1], 1)
-
-    def forward(self, x, feature_matching=False):
-        x = self.blockSequence(x)
-        if feature_matching:
-            return x
-        x = self.encFC(x)
-        return x
-
-class Encoder(nn.Module):
-    def __init__(self, imgChannels=3, zDim=zDim):
-        super(Encoder, self).__init__()
-        #self.residualBlock1 = nn.Sequential(nn.Conv2d(3, block_outdim[0], kernel_size=7, stride=2, padding=3), nn.LeakyReLU(0.2)) #64x64x64
-        self.residualBlock1 = residualBlockDownFullDisc(3, block_outdim[0], blocks=blocks[0], downsample=2) #256x32x32
-        self.residualBlock2 = residualBlockDownFullDisc(block_outdim[0], block_outdim[1], blocks=blocks[1], downsample=2) #512x16x16
-        self.residualBlock3 = residualBlockDownFullDisc(block_outdim[1], block_outdim[2], blocks=blocks[2], downsample=2) #1024x8x8
-        self.residualBlock4 = nn.Sequential(residualBlockDownFullDisc(block_outdim[2], block_outdim[3], blocks=blocks[3], downsample=2))
-        
-        self.blockSequence = torch.nn.Sequential(self.residualBlock1, self.residualBlock2, self.residualBlock3, self.residualBlock4)
-        self.momentCreation = torch.nn.Conv2d(block_outdim[-1], 2*block_outdim[-1], 1)
-
-    def encoder(self, x):
-        x = self.blockSequence(x)
-        moments = self.momentCreation(x)
-        return DiagonalGaussianDistribution(moments)
-
-    def forward(self, x, sampling=True):
-        dist = self.encoder(x)
-        return dist
-
-def residualBlockUp(channelIn, channelOut, blocks=3, upsample=2):
-    layers = []
-    for i in range(blocks):
-        filters = [channelIn, channelIn, channelIn, channelOut] if (i == 0) else [channelOut, channelIn, channelIn, channelOut]
-        kernels = [1, 4, 1] if (i == 0) else [1,3,1]
-        strides = [1, upsample, 1] if (i == 0) else [1, 1, 1]
-        paddings = [0, 1, 0]
-        shortcut = nn.ConvTranspose2d(channelIn, channelOut, kernel_size=1, stride=upsample, bias=False, padding=0, output_padding=1) if (i == 0) else nn.Identity()
-        layer = torchgan.layers.ResidualBlockTranspose2d(filters=filters, kernels=kernels, strides=strides, paddings=paddings, 
-                                           nonlinearity=nn.LeakyReLU(0.2), batchnorm=False, 
-                                           shortcut=shortcut, 
-                                           last_nonlinearity=nn.LeakyReLU(0.2))
-        layers = layers + [layer]
-    return nn.Sequential(*layers)
-    
-class Decoder(nn.Module):
-    def __init__(self, imgChannels=3, zDim=zDim):
-        super(Decoder, self).__init__()
-        
-        self.residualBlock1 = residualBlockUp(block_outdim[3], block_outdim[2], blocks=blocks[3], upsample=2)
-        self.residualBlock2 = residualBlockUp(block_outdim[2], block_outdim[1], blocks=blocks[2], upsample=2) #256x32x32
-        self.residualBlock3 = residualBlockUp(block_outdim[1], block_outdim[0], blocks=blocks[1], upsample=2) #512x16x16
-        self.residualBlock4 = residualBlockUp(block_outdim[0], 3, blocks=blocks[0], upsample=2) #1024x8x8
-        
-        self.blockSequence = torch.nn.Sequential(self.residualBlock1, self.residualBlock2, self.residualBlock3, self.residualBlock4)
+class SelfAttention(nn.Module):
+    def __init__(self, h_size):
+        super(SelfAttention, self).__init__()
+        self.h_size = h_size
+        self.mha = nn.MultiheadAttention(h_size, 4, batch_first=True)
+        self.ln = nn.LayerNorm([h_size])
+        self.ff_self = nn.Sequential(
+            nn.LayerNorm([h_size]),
+            nn.Linear(h_size, h_size),
+            nn.GELU(),
+            nn.Linear(h_size, h_size),
+        )
 
     def forward(self, x):
-        x = self.blockSequence(x)
+        x_ln = self.ln(x)
+        attention_value, _ = self.mha(x_ln, x_ln, x_ln)
+        attention_value = attention_value + x
+        attention_value = self.ff_self(attention_value) + attention_value
+        return attention_value
+
+
+class SAWrapper(nn.Module):
+    def __init__(self, h_size, num_s):
+        super(SAWrapper, self).__init__()
+        self.sa = nn.Sequential(*[SelfAttention(h_size) for _ in range(1)])
+        self.num_s = num_s
+        self.h_size = h_size
+
+    def forward(self, x):
+        x = x.view(-1, self.h_size, self.num_s * self.num_s).swapaxes(1, 2)
+        x = self.sa(x)
+        x = x.swapaxes(2, 1).view(-1, self.h_size, self.num_s, self.num_s)
         return x
 
-class AutoencoderModel(pl.LightningModule):
-    def __init__(self, in_size, in_size_sqrt, img_depth):
-        super().__init__()
-        self.in_size = in_size
-        self.in_size_sqrt = in_size_sqrt
-        self.img_depth = img_depth
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.discriminator = VAE_Discriminator()
 
-    def forward(self, x, sampling=True):
-        encoding = self.encoder(x)
-        if sampling:
-            return self.decoder(encoding.sample())
+# U-Net code adapted from: https://github.com/milesial/Pytorch-UNet
+
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels, mid_channels=None, residual=False):
+        super().__init__()
+        self.residual = residual
+        if not mid_channels:
+            mid_channels = out_channels
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(1, mid_channels),
+            nn.GELU(),
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(1, out_channels),
+        )
+
+    def forward(self, x):
+        if self.residual:
+            return F.gelu(x + self.double_conv(x))
         else:
-            return self.decoder(encoding.mode())
-            
-    def get_encoder_loss(self, imgs, batch_size, prefix):
-        encoding = self.encoder(imgs)
-        G_imgs = self.decoder(encoding.sample())
-        D_imgs_activation = self.discriminator(imgs, feature_matching=True)
-        D_decoder_activation = self.discriminator(G_imgs, feature_matching=True)
-    
-        kl_divergence = encoding.kl().mean()
-        like_loss = torch.nn.functional.mse_loss(D_imgs_activation, D_decoder_activation)
-        encoder_loss = kl_divergence + like_loss
-        self.log(prefix+"encoder_kl_loss", kl_divergence)
-        self.log(prefix+"encoder_like_loss", like_loss)
-        return encoder_loss
+            return self.double_conv(x)
+
+
+class Down(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, in_channels, residual=True),
+            DoubleConv(in_channels, out_channels),
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+
+class Up(nn.Module):
+    def __init__(self, in_channels, out_channels, bilinear=True):
+        super().__init__()
+
+        # if bilinear, use the normal convolutions to reduce the number of channels
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+            self.conv = DoubleConv(in_channels, in_channels, residual=True)
+            self.conv2 = DoubleConv(in_channels, out_channels, in_channels // 2)
+        else:
+            self.up = nn.ConvTranspose2d(
+                in_channels, in_channels // 2, kernel_size=2, stride=2
+            )
+            self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        # input is CHW
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
+        x = torch.cat([x2, x1], dim=1)
+        x = self.conv(x)
+        x = self.conv2(x)
+        return x
+
+
+class OutConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(OutConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+class AutoencoderKL(pl.LightningModule):
+    def __init__(self,
+                 ddconfig,
+                 lossconfig,
+                 embed_dim,
+                 base_learning_rate
+                 ):
+        super().__init__()
+        self.encoder = Encoder(**ddconfig)
+        self.decoder = Decoder(**ddconfig)
+        self.loss = instantiate_from_config(lossconfig)
+        self.learning_rate = base_learning_rate
+        assert ddconfig["double_z"]
+        self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.embed_dim = embed_dim
         
-    def get_decoder_loss(self, imgs, batch_size, prefix):
-        encoding = self.encoder(imgs)
-        sample = encoding.sample()
-        fake_mean = torch.randn_like(sample)
-        G_imgs = self.decoder(sample)
-        G_fake = self.decoder(fake_mean)
-        
-        D_imgs_activation = self.discriminator(imgs, feature_matching=True)
-        D_decoder_activation = self.discriminator(G_imgs, feature_matching=True)
-        D_decoder_logit = self.discriminator(G_imgs)
-        D_fake_logit = self.discriminator(G_fake)
-        
-        decoder_loss_encoded = torch.mean(D_decoder_logit)
-        decoder_loss_fake = torch.mean(D_fake_logit)
-        like_loss = torch.nn.functional.mse_loss(D_imgs_activation, D_decoder_activation)
-        decoder_loss = decoder_loss_encoded + decoder_loss_fake + like_loss
-        return decoder_loss
-        
-    def get_discriminator_loss(self, imgs, batch_size, prefix):
-        encoding = self.encoder(imgs)
-        sample = encoding.sample()
-        fake_mean = torch.randn_like(sample)
-        G_imgs = self.decoder(sample)
-        G_fake = self.decoder(fake_mean)
-        
-        D_imgs_logit = self.discriminator(imgs)
-        D_decoder_logit = self.discriminator(G_imgs)
-        D_fake_logit = self.discriminator(G_fake)
-        
-        discriminator_loss_imgs = torch.mean(D_imgs_logit)
-        discriminator_loss_decoder = -0.5 * torch.mean(D_decoder_logit)
-        discriminator_loss_fake = -0.5 * torch.mean(D_fake_logit)
-        #GP loss
-        # Calculate interpolation
-        alpha = torch.rand(batch_size, 1, 1, 1)
-        alpha = alpha.expand_as(imgs)
-        alpha = alpha.to(device=self.device)
-        interpolated = alpha * imgs.data + (1 - alpha) * G_imgs.data
-        interpolated = Variable(interpolated, requires_grad=True)
-        interpolated = interpolated.cuda()
-        # Calculate rating of interpolated samples
-        with torch.enable_grad():
-            D_interp_logit = self.discriminator.forward(interpolated)
-        # Calculate gradients of probabilities with respect to examples
-        gradients = torch_grad(outputs=D_interp_logit, inputs=interpolated,
-                                   grad_outputs=torch.ones_like(D_interp_logit),
-                                   create_graph=True, retain_graph=True)[0]
-        
-        # Gradients have shape (batch_size, num_channels, img_width, img_height),
-        # so flatten to easily take norm per example in batch
-        gradients = gradients.view(batch_size, -1)
-        # Derivatives of the gradient close to 0 can cause problems because of
-        # the square root, so manually calculate norm and add epsilon
-        gradients_norm = torch.sqrt(torch.sum(gradients ** 2, dim=1) + 1e-12)
-        
-        # Return gradient penalty
-        discriminator_loss_gp = ((gradients_norm - 1) ** 2).mean()    
-            
-        discriminator_loss = discriminator_loss_imgs + discriminator_loss_decoder + discriminator_loss_fake + discriminator_loss_gp
-        return discriminator_loss
+    def encode_raw(self, x):
+        h = self.encoder(x)
+        moments = self.quant_conv(h)
+        return moments
+
+    def encode(self, x):
+        h = self.encoder(x)
+        moments = self.quant_conv(h)
+        posterior = DiagonalGaussianDistribution(moments)
+        return posterior
+
+    def decode(self, z):
+        z = self.post_quant_conv(z)
+        dec = self.decoder(z)
+        return dec
+
+    def forward(self, input, sample_posterior=True):
+        posterior = self.encode(input)
+        if sample_posterior:
+            z = posterior.sample()
+        else:
+            z = posterior.mode()
+        dec = self.decode(z)
+        return dec, posterior
 
     def training_step(self, batch, batch_idx, optimizer_idx):
-        batch_size = batch.shape[0]
-        imgs = batch
-        if (optimizer_idx == 0):
-            encoder_loss = self.get_encoder_loss(imgs, batch_size, "train/")
-            self.log("train/encoder_loss", encoder_loss)
-            return encoder_loss
-        elif (optimizer_idx == 1):
-            decoder_loss = self.get_decoder_loss(imgs, batch_size, "train/")
-            self.log("train/decoder_loss", decoder_loss)
-            return decoder_loss
-        elif (optimizer_idx == 2):
-            discriminator_loss = self.get_discriminator_loss(imgs, batch_size, "train/")
-            self.log("train/discriminator_loss", discriminator_loss)
-            return discriminator_loss
-        return
+        inputs = batch
+        reconstructions, posterior = self(inputs)
+
+        if optimizer_idx == 0:
+            # train encoder+decoder+logvar
+            aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
+            self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+            return aeloss
+
+        if optimizer_idx == 1:
+            # train the discriminator
+            discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, optimizer_idx, self.global_step,
+                                                last_layer=self.get_last_layer(), split="train")
+
+            self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+            return discloss
 
     def validation_step(self, batch, batch_idx):
-        batch_size = batch.shape[0]
-        encoder_loss = self.get_encoder_loss(batch, batch_size, "val/")
-        decoder_loss = self.get_decoder_loss(batch, batch_size, "val/")
-        discriminator_loss = self.get_discriminator_loss(batch, batch_size, "val/")
-        self.log("val/encoder_loss", encoder_loss)
-        self.log("val/decoder_loss", decoder_loss)
-        self.log("val/discriminator_loss", discriminator_loss)
+        inputs = batch
+        reconstructions, posterior = self(inputs)
+        aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, self.global_step,
+                                        last_layer=self.get_last_layer(), split="val")
+
+        discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, self.global_step,
+                                            last_layer=self.get_last_layer(), split="val")
+
+        self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
+        self.log_dict(log_dict_ae)
+        self.log_dict(log_dict_disc)
         if (batch_idx == 0):
             self.val_batch = batch
-        return
-    
+        return self.log_dict
+        
     def on_validation_epoch_end(self):
         # Get tensorboard logger
         tb_logger = None
@@ -268,17 +215,214 @@ class AutoencoderModel(pl.LightningModule):
         if tb_logger is None:
                 raise ValueError('TensorBoard Logger not found')
         sample_batch_size = self.val_batch.shape[0]
-        encoding = self.encoder(self.val_batch)
-        decoding = self.decoder(encoding.mode())
+        decoding, _ = self(self.val_batch)
         x = torch.cat([self.val_batch, decoding], dim=0)
         x = (x.clamp(-1, 1) + 1) / 2.0
-
+        
         tb_logger.add_images(f"val/output_images", x, self.current_epoch)
+
+    def configure_optimizers(self):
+        lr = self.learning_rate
+        opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
+                                  list(self.decoder.parameters())+
+                                  list(self.quant_conv.parameters())+
+                                  list(self.post_quant_conv.parameters()),
+                                  lr=lr, betas=(0.5, 0.9))
+        opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
+                                    lr=lr, betas=(0.5, 0.9))
+        return [opt_ae, opt_disc], []
+
+    def get_last_layer(self):
+        return self.decoder.conv_out.weight
+
+class DiffusionModel(pl.LightningModule):
+    def __init__(self, autoencoder_model, in_size, in_size_sqrt, t_range, img_depth, train_dataset):
+        super().__init__()
+        self.beta_small = 1e-4
+        self.beta_large = 0.02
+        self.t_range = t_range
+        self.in_size = in_size
+        self.in_size_sqrt = in_size_sqrt
+        self.img_depth = img_depth
+        self.autoencoder_model = autoencoder_model.eval()
+        self.train_dataset = train_dataset
+        print("Compiling latents...")
+        sys.stdout.flush()
+        self.latents_mode = DiagonalGaussianDistribution(torch.from_numpy(train_dataset.latent_data.copy()).type(torch.FloatTensor)).mode()
+    
+        print(img_depth)
+        print("Depth printed again!")
+        sys.stdout.flush()
+        bilinear = True
+        self.inc = DoubleConv(img_depth, 128)
+        self.down1 = Down(128, 128)
+        self.down2 = Down(128, 128)
+        factor = 2 if bilinear else 1
+        self.down3 = Down(128, 512 // factor)
+        self.down4 = Down(256, 512 // factor)
+        self.down5 = Down(256, 512 // factor)
+        self.up1 = Up(512, 512 // factor, bilinear)
+        self.up2 = Up(512, 256 // factor, bilinear)
+        self.up3 = Up(256, 256 // factor, bilinear)
+        self.up4 = Up(256, 256 // factor, bilinear)
+        self.up5 = Up(256, 64, bilinear)
+        self.outc = OutConv(64, img_depth)
+        self.sa1 = SAWrapper(128, 8)
+        self.sa2 = SAWrapper(256, 4)
+        self.sa3 = SAWrapper(256, 2)
+
+    def pos_encoding(self, t, channels, embed_size):
+        inv_freq = 1.0 / (
+            10000
+            ** (torch.arange(0, channels, 2, device=self.device).float() / channels)
+        )
+        pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
+        return pos_enc.view(-1, channels, 1, 1).repeat(1, 1, embed_size, embed_size)
+
+    def forward(self, x, t):
+        """
+        Model is U-Net with added positional encodings and self-attention layers.
+        """
+        x1 = self.inc(x)
+        x2 = self.down1(x1) + self.pos_encoding(t, 128, 16)
+        x3 = self.down2(x2) + self.pos_encoding(t, 128, 8)
+        x3 = self.sa1(x3)
+        x4 = self.down3(x3) + self.pos_encoding(t, 256, 4)
+        x4 = self.sa2(x4)
+        x5 = self.down4(x4) + self.pos_encoding(t, 256, 2)
+        x6 = self.down5(x5) + self.pos_encoding(t, 256, 1)
+        #print(x.shape, x1.shape, x2.shape, x3.shape, x4.shape, x5.shape, x6.shape)
+        x = self.up1(x6, x5) + self.pos_encoding(t, 256, 2)
+        x = self.sa3(x)
+        x = self.up2(x, x4) + self.pos_encoding(t, 128, 4)
+        x = self.up3(x, x3) + self.pos_encoding(t, 128, 8)
+        x = self.up4(x, x2) + self.pos_encoding(t, 128, 16)
+        #print(x.shape, x1.shape)
+        x = self.up5(x, x1) + self.pos_encoding(t, 64, 32)
+        output = self.outc(x)
+        return output
+
+    def beta(self, t):
+        return self.beta_small + (t / self.t_range) * (
+            self.beta_large - self.beta_small
+        )
+
+    def alpha(self, t):
+        return 1 - self.beta(t)
+
+    def alpha_bar(self, t):
+        return math.prod([self.alpha(j) for j in range(t)])
+
+    def get_loss(self, batch, batch_idx):
+        """
+        Corresponds to Algorithm 1 from (Ho et al., 2020).
+        """
+        ts = torch.randint(0, self.t_range, [batch.shape[0]], device=self.device)
+        noise_imgs = []
+        epsilons = torch.randn(batch.shape, device=self.device)
+        for i in range(len(ts)):
+            a_hat = self.alpha_bar(ts[i])
+            noise_imgs.append(
+                (math.sqrt(a_hat) * batch[i]) + (math.sqrt(1 - a_hat) * epsilons[i])
+            )
+        noise_imgs = torch.stack(noise_imgs, dim=0)
+        e_hat = self.forward(noise_imgs, ts.unsqueeze(-1).type(torch.float))
+        loss = nn.functional.mse_loss(
+            e_hat.reshape(-1, self.in_size), epsilons.reshape(-1, self.in_size)
+        )
+        return loss
+
+    def denoise_sample(self, x, t):
+        """
+        Corresponds to the inner loop of Algorithm 2 from (Ho et al., 2020).
+        """
+        with torch.no_grad():
+            if t > 1:
+                z = torch.randn(x.shape, device=self.device)
+            else:
+                z = 0
+            e_hat = self.forward(x, t.view(1, 1).repeat(x.shape[0], 1))
+            pre_scale = 1 / math.sqrt(self.alpha(t))
+            e_scale = (1 - self.alpha(t)) / math.sqrt(1 - self.alpha_bar(t))
+            post_sigma = math.sqrt(self.beta(t)) * z
+            x = pre_scale * (x - e_scale * e_hat) + post_sigma
+            return x
+
+    def training_step(self, batch, batch_idx):
+        images, moments = batch
+        posterior = DiagonalGaussianDistribution(moments)
+        encoding = posterior.sample()
+        loss = self.get_loss(encoding, batch_idx)
+        self.log("train/loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        images, moments = batch
+        posterior = DiagonalGaussianDistribution(moments)
+        encoding = posterior.sample()
+        loss = self.get_loss(encoding, batch_idx)
+        self.log("val/loss", loss)
+        if (batch_idx == 0):
+            self.val_batch = images
+            self.val_encoding = posterior.mode()
+        return
+    
+    def get_nearest_latents(self, x):
+        self.latents_mode = self.latents_mode.to(self.device)
+        resulting_list = []
+        for i in range(x.shape[0]):
+            latent = torch.unsqueeze(x[i], 0)
+            difference = torch.sum(torch.abs(self.latents_mode - latent), dim=(1,2,3))
+            values, indices = torch.topk(difference, 1, largest=False)
+            resulting_list.append(int(indices[0]))
+        print(resulting_list)
+        return self.latents_mode[resulting_list]
+    
+    def on_validation_epoch_end(self):
+        # Get tensorboard logger
+        tb_logger = None
+        for logger in self.trainer.loggers:
+            if isinstance(logger, pl.loggers.TensorBoardLogger):
+                tb_logger = logger.experiment
+                break
+
+        if tb_logger is None:
+                raise ValueError('TensorBoard Logger not found')
+        sample_batch_size = 16
+        sample_steps = torch.arange(self.t_range-1, 0, -1, device=self.device)
+        print("Random seed made!")
+        x = torch.randn((sample_batch_size, self.img_depth, self.in_size_sqrt, self.in_size_sqrt), device=self.device)
+        for t in sample_steps:
+            x = self.denoise_sample(x, t)
+        nearest_neighbors = self.get_nearest_latents(x)
+        x = self.autoencoder_model.decode(x)
+        x = (x.clamp(-1, 1) + 1) / 2.0
+        nearest_neighbors = self.autoencoder_model.decode(nearest_neighbors)
+        nearest_neighbors = (nearest_neighbors.clamp(-1, 1) + 1) / 2.0
+        print("Clamped!")
+        print(x.shape)
+        tb_logger.add_images(f"val/output_images", x, self.current_epoch)
+        tb_logger.add_images(f"val/output_images_nearest", nearest_neighbors, self.current_epoch)
+        tb_logger.add_images(f"val/decoded_original_images", (self.autoencoder_model.decode(self.val_encoding).clamp(-1, 1) + 1) / 2.0, self.current_epoch)
+        tb_logger.add_images(f"val/original_images", (self.val_batch.clamp(-1, 1) + 1) / 2.0, self.current_epoch)
         print("Images added!")
 
     def configure_optimizers(self):
-        encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=2e-6)
-        decoder_optimizer = torch.optim.Adam(self.decoder.parameters(), lr=2e-6)
-        discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=2e-6)
-        return [encoder_optimizer, decoder_optimizer, discriminator_optimizer], []
- 
+        optimizer = torch.optim.Adam(list(self.inc.parameters())
+                                    + list(self.down1.parameters())
+                                    + list(self.down2.parameters())
+                                    + list(self.down3.parameters())
+                                    + list(self.down4.parameters())
+                                    + list(self.down5.parameters())
+                                    + list(self.up1.parameters())
+                                    + list(self.up2.parameters())
+                                    + list(self.up3.parameters())
+                                    + list(self.up4.parameters())
+                                    + list(self.up5.parameters())
+                                    + list(self.sa1.parameters())
+                                    + list(self.sa2.parameters())
+                                    + list(self.sa3.parameters())
+                                    + list(self.outc.parameters()), lr=5e-4)
+        return optimizer
