@@ -260,8 +260,8 @@ class DiffusionModel(pl.LightningModule):
         factor = 2 if bilinear else 1
         self.down3 = Down(128, 256 // factor)
         self.up3 = Up(256, 256 // factor, bilinear)
-        self.up4 = Up(256, 256 // factor, bilinear)
-        self.up5 = Up(256, 64, bilinear)
+        self.up2 = Up(256, 256 // factor, bilinear)
+        self.up1 = Up(256, 64, bilinear)
         self.outc = OutConv(64, img_depth)
         self.sa1 = SAWrapper(128, 8)
         self.sa2 = SAWrapper(128, 4)
@@ -290,9 +290,9 @@ class DiffusionModel(pl.LightningModule):
         #print(x.shape, x1.shape, x2.shape, x3.shape, x4.shape, x5.shape, x6.shape)
         x = self.up3(x4, x3) + self.pos_encoding(t, 128, 8)
         x = self.sa3(x)
-        x = self.up4(x, x2) + self.pos_encoding(t, 128, 16)
+        x = self.up2(x, x2) + self.pos_encoding(t, 128, 16)
         #print(x.shape, x1.shape)
-        x = self.up5(x, x1) + self.pos_encoding(t, 64, 32)
+        x = self.up1(x, x1) + self.pos_encoding(t, 64, 32)
         output = self.outc(x)
         return output
 
@@ -407,8 +407,8 @@ class DiffusionModel(pl.LightningModule):
                                     + list(self.down2.parameters())
                                     + list(self.down3.parameters())
                                     + list(self.up3.parameters())
-                                    + list(self.up4.parameters())
-                                    + list(self.up5.parameters())
+                                    + list(self.up2.parameters())
+                                    + list(self.up1.parameters())
                                     + list(self.sa1.parameters())
                                     + list(self.sa2.parameters())
                                     + list(self.sa3.parameters())
