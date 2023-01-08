@@ -82,6 +82,7 @@ class Down(nn.Module):
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(2),
             DoubleConv(in_channels, in_channels, residual=True),
+            DoubleConv(in_channels, in_channels, residual=True),
             DoubleConv(in_channels, out_channels),
         )
 
@@ -96,7 +97,7 @@ class Up(nn.Module):
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.conv = DoubleConv(in_channels, in_channels, residual=True)
+            self.conv = nn.Sequential(DoubleConv(in_channels, in_channels, residual=True), DoubleConv(in_channels, in_channels, residual=True))
             self.conv2 = DoubleConv(in_channels, out_channels, in_channels // 2)
         else:
             self.up = nn.ConvTranspose2d(
@@ -254,18 +255,18 @@ class DiffusionModel(pl.LightningModule):
         print("Depth printed again!")
         sys.stdout.flush()
         bilinear = True
-        self.inc = DoubleConv(img_depth, 128)
-        self.down1 = Down(128, 128)
-        self.down2 = Down(128, 128)
         factor = 2 if bilinear else 1
+        self.inc = DoubleConv(img_depth, 128)
+        self.down1 = Down(128, 256 // factor)
+        self.down2 = Down(128, 256 // factor)
         self.down3 = Down(128, 256 // factor)
         self.up3 = Up(256, 256 // factor, bilinear)
         self.up2 = Up(256, 256 // factor, bilinear)
-        self.up1 = Up(256, 64, bilinear)
-        self.outc = OutConv(64, img_depth)
-        self.sa1 = SAWrapper(128, 8)
-        self.sa2 = SAWrapper(128, 4)
-        self.sa3 = SAWrapper(128, 8)
+        self.up1 = Up(256, 256, bilinear)
+        self.outc = OutConv(256, img_depth)
+        self.sa1 = SAWrapper(128, 16)
+        self.sa2 = SAWrapper(128, 8)
+        self.sa3 = SAWrapper(128, 16)
 
     def pos_encoding(self, t, channels, embed_size):
         inv_freq = 1.0 / (
@@ -282,17 +283,17 @@ class DiffusionModel(pl.LightningModule):
         Model is U-Net with added positional encodings and self-attention layers.
         """
         x1 = self.inc(x)
-        x2 = self.down1(x1) + self.pos_encoding(t, 128, 16)
-        x3 = self.down2(x2) + self.pos_encoding(t, 128, 8)
+        x2 = self.down1(x1) + self.pos_encoding(t, 128, 32)
+        x3 = self.down2(x2) + self.pos_encoding(t, 128, 16)
         x3 = self.sa1(x3)
-        x4 = self.down3(x3) + self.pos_encoding(t, 128, 4)
+        x4 = self.down3(x3) + self.pos_encoding(t, 128, 8)
         x4 = self.sa2(x4)
         #print(x.shape, x1.shape, x2.shape, x3.shape, x4.shape, x5.shape, x6.shape)
-        x = self.up3(x4, x3) + self.pos_encoding(t, 128, 8)
+        x = self.up3(x4, x3) + self.pos_encoding(t, 128, 16)
         x = self.sa3(x)
-        x = self.up2(x, x2) + self.pos_encoding(t, 128, 16)
+        x = self.up2(x, x2) + self.pos_encoding(t, 128, 32)
         #print(x.shape, x1.shape)
-        x = self.up1(x, x1) + self.pos_encoding(t, 64, 32)
+        x = self.up1(x, x1) + self.pos_encoding(t, 256, 64)
         output = self.outc(x)
         return output
 
@@ -382,7 +383,7 @@ class DiffusionModel(pl.LightningModule):
 
         if tb_logger is None:
                 raise ValueError('TensorBoard Logger not found')
-        sample_batch_size = 16
+        sample_batch_size = 8
         sample_steps = torch.arange(self.t_range-1, 0, -1, device=self.device)
         print("Random seed made!")
         x = torch.randn((sample_batch_size, self.img_depth, self.in_size_sqrt, self.in_size_sqrt), device=self.device)
@@ -412,5 +413,5 @@ class DiffusionModel(pl.LightningModule):
                                     + list(self.sa1.parameters())
                                     + list(self.sa2.parameters())
                                     + list(self.sa3.parameters())
-                                    + list(self.outc.parameters()), lr=5e-4)
+                                    + list(self.outc.parameters()), lr=1e-4)
         return optimizer

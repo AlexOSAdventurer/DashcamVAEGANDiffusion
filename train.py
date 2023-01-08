@@ -9,15 +9,15 @@ from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
 # Training hyperparameters
-dataset_choice = "AutoencoderBoosted"
+dataset_choice = "AutoencoderBoosted256x256"
 base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
-dataset_path_train = base_dir + "data/train_float_128x128.npy"
-dataset_path_val = base_dir + "data/val_float_128x128.npy"
-latent_dataset_path_train =  base_dir + "data/train_float_128x128_latent.npy"
-latent_dataset_path_val =  base_dir + "data/val_float_128x128_latent.npy"
+dataset_path_train = base_dir + "data/train_float_256x256.npy"
+dataset_path_val = base_dir + "data/val_float_256x256.npy"
+latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent.npy"
+latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent.npy"
 max_epoch = 10
 batch_size = 16
-config_data = yaml.safe_load(open("autoencoder_kl_64x64x3.yaml"))
+config_data = yaml.safe_load(open("autoencoder_kl_256x256x3.yaml"))
 
 # Loading parameters
 load_model = False
@@ -46,7 +46,7 @@ autoencoder_model = AutoencoderKL.load_from_checkpoint("autoencoderkl.ckpt", ddc
                  embed_dim=config_data['model']['params']['embed_dim'],
                  base_learning_rate=config_data['model']['base_learning_rate'])
 
-model = DiffusionModel(autoencoder_model=autoencoder_model, in_size=32*32, in_size_sqrt=32, t_range=1000, img_depth=train_dataset.depth, train_dataset=train_dataset)
+model = DiffusionModel(autoencoder_model=autoencoder_model, in_size=64*64, in_size_sqrt=64, t_range=1000, img_depth=train_dataset.depth, train_dataset=train_dataset)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(

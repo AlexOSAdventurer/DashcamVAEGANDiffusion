@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=DiffusionAutoEncoder24
+#SBATCH --job-name=DiffusionAutoEncoder64x64_2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
 #SBATCH --nodes=11
