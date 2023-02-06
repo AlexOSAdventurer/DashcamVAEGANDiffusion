@@ -1,52 +1,42 @@
 import torch
-from data import DiffSet, ImageDataset
+from data import ImageDataset
 import pytorch_lightning as pl
-from model import AutoencoderKL, DiffusionModel
+from model import DiffusionModel
 from torch.utils.data import DataLoader
-import imageio
 import glob
 from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
 # Training hyperparameters
 dataset_choice = "AutoencoderBoosted256x256"
-base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
-dataset_path_train = base_dir + "data/train_float_256x256.npy"
-dataset_path_val = base_dir + "data/val_float_256x256.npy"
+base_dir = "/work/cseos2g/papapalpi/"
 latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent.npy"
 latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent.npy"
-max_epoch = 10
-batch_size = 16
-config_data = yaml.safe_load(open("autoencoder_kl_256x256x3.yaml"))
+config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
 
 # Loading parameters
 load_model = False
-load_version_num = 34
+load_version_num = 25
 
 # Code for optionally loading model
-pass_version = None
 last_checkpoint = None
 
 if load_model:
-    pass_version = load_version_num
     last_checkpoint = glob.glob(
         f"./lightning_logs/{dataset_choice}/version_{load_version_num}/checkpoints/*.ckpt"
     )[-1]
 
-
 # Create datasets and data loaders
-train_dataset = ImageDataset(dataset_path_train, latent_dataset_path_train)
-val_dataset = ImageDataset(dataset_path_val, latent_dataset_path_val)
+train_dataset = ImageDataset(latent_dataset_path_train)
+val_dataset = ImageDataset(latent_dataset_path_val)
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=8, num_workers=4, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=config_data["batch_size"], num_workers=16, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=8, num_workers=16, shuffle=False)
 
-autoencoder_model = AutoencoderKL.load_from_checkpoint("autoencoderkl.ckpt", ddconfig=config_data['model']['params']['ddconfig'],
-                 lossconfig=config_data['model']['params']['lossconfig'],
-                 embed_dim=config_data['model']['params']['embed_dim'],
-                 base_learning_rate=config_data['model']['base_learning_rate'])
-
-model = DiffusionModel(autoencoder_model=autoencoder_model, in_size=64*64, in_size_sqrt=64, t_range=1000, img_depth=train_dataset.depth, train_dataset=train_dataset)
+if load_model:
+    model = DiffusionModel.load_from_checkpoint(last_checkpoint, config_data)
+else:
+    model = DiffusionModel(autoencoder_model=autoencoder_model, config_data)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(
@@ -62,7 +52,7 @@ class ImageDataModule(pl.LightningDataModule):
     def __init__(
         self,
         batch_size: int = 4,
-        workers: int = 2,
+        workers: int = 8,
         **kwargs,
     ):
         super().__init__()
@@ -89,6 +79,5 @@ cli = LightningCLI(
             logger=tb_logger
         ),
 )
-# TODO: determine per-process batch size given total batch size
-# TODO: enable evaluate
+
 cli.trainer.fit(cli.model, datamodule=cli.datamodule)
