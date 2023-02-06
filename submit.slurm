@@ -1,14 +1,13 @@
 #!/bin/bash -l
-#SBATCH --job-name=DiffusionAutoEncoder64x64_2
+#SBATCH --job-name=DiffusionAutoEncoder64x64_Full_1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=20
-#SBATCH --nodes=11
+#SBATCH --cpus-per-task=40
+#SBATCH --nodes=12
 #SBATCH --mem=128gb
 #SBATCH --time=48:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
-#SBATCH --constraint='gpu_32gb'
-#SBATCH --output=/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/logs/%x-%j.out
+#SBATCH --output=/work/cseos2g/papapalpi/logs/%x-%j.out
 
 
 # (optional) debugging flags
@@ -29,4 +28,4 @@ conda activate your_env_name
 #--data_path path/to/dataset
 
 export PYTHONPATH="/home/cseos2g/papapalpi/.local/lib/python3.8/site-packages/:$PYTHONPATH"
-srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train.py fit --trainer.num_nodes 11 --trainer.gpus 2
+srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train.py fit --trainer.num_nodes 12 --trainer.gpus 2

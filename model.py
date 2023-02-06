@@ -25,13 +25,16 @@ class DiffusionModel(pl.LightningModule):
         self.ddim_model = None
         self.semantic_encoder = None
         
-    def forward(self, x, t, c):
+    def forward(self, x, t, c=None):
+        if c is None:
+            c = diffusion.encode_semantic(self.semantic_encoder, x)
+        return diffusion.estimate_noise(self.ddim_model, x, t, c)
         
     def get_loss(images, batch_idx):
         number_of_images = images.shape[0]
         time_steps = diffusion.create_random_time_steps(number_of_images, self.t_range, self.device)
         noised_images, source_noise = diffusion.diffuse_images(images, time_steps, self.t_range, self.beta_small, self.beta_large)
-        estimated_noise = diffusion.estimate_noise(self.ddim_model, noised_images, time_steps, diffusion.encode_semantic(self.semantic_encoder, images))
+        estimated_noise = self.forward(noised_images, time_steps)
         return F.mse_loss(estimated_noise, source_noise)
 
     def training_step(self, batch, batch_idx):
