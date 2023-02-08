@@ -12,7 +12,8 @@ class ImageDataset(Dataset):
         print(self.total_sequences, self.dataset_len, self.depth, self.size)
 
     def __getitem__(self, index):
-        return torch.from_numpy(self.images_data[index].copy()).type(torch.FloatTensor)
+        #return torch.from_numpy(self.images_data[index].copy()).type(torch.FloatTensor)
+        return torch.clamp(((torch.from_numpy(self.images_data[index].copy()).type(torch.FloatTensor) / 255.0) - 0.5) * 2.0, -1.0, 1.0)
 
     def __len__(self):
         return self.total_sequences

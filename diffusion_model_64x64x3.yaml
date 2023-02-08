@@ -1,6 +1,6 @@
 model:
-  batch_size: 16
-  base_learning_rate: 0.000001
+  batch_size: 8
+  base_learning_rate: 0.0001
   in_size: 4096
   in_size_sqrt: 64
   t_range: 1000
