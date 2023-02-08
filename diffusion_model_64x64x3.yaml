@@ -1,0 +1,9 @@
+model:
+  batch_size: 16
+  base_learning_rate: 0.000001
+  in_size: 4096
+  in_size_sqrt: 64
+  t_range: 1000
+  img_depth: 3
+  beta_small: 0.0001
+  beta_large: 0.02

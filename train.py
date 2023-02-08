@@ -1,7 +1,7 @@
 import torch
 from data import ImageDataset
 import pytorch_lightning as pl
-from model import DiffusionModel
+from lightning_training_model import DiffusionModel
 from torch.utils.data import DataLoader
 import glob
 from pytorch_lightning.utilities.cli import LightningCLI
@@ -16,7 +16,7 @@ config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
 
 # Loading parameters
 load_model = False
-load_version_num = 25
+load_version_num = 21
 
 # Code for optionally loading model
 last_checkpoint = None
@@ -30,19 +30,19 @@ if load_model:
 train_dataset = ImageDataset(latent_dataset_path_train)
 val_dataset = ImageDataset(latent_dataset_path_val)
 
-train_loader = DataLoader(train_dataset, batch_size=config_data["batch_size"], num_workers=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=8, num_workers=16, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=2, num_workers=16, shuffle=False)
 
 if load_model:
-    model = DiffusionModel.load_from_checkpoint(last_checkpoint, config_data)
+    model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
 else:
-    model = DiffusionModel(autoencoder_model=autoencoder_model, config_data)
+    model = DiffusionModel(config_data)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(
     "lightning_logs/",
     name=dataset_choice,
-    version=pass_version,
+    version=None,
 )
 
 def getModel() -> pl.LightningModule:

@@ -1,0 +1,3 @@
+[submodule "unet_autoencoder/diffae"]
+	path = unet_autoencoder/diffae
+	url = https://github.com/phizaz/diffae.git
