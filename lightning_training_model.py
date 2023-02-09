@@ -24,11 +24,11 @@ class DiffusionModel(pl.LightningModule):
         #self.ddim_model = unet_autoencoder.generate_ddim_model()
         #self.semantic_encoder = unet_autoencoder.generate_semantic_encoder_model()
         #Not used during training, but useful for visualization during validation stage
-        #self.autoencoder_model = first_stage_autoencoder.generate_pretrained_model().eval()
+        self.autoencoder_model = first_stage_autoencoder.generate_pretrained_model().eval()
         
     def decode_encoding(self, encoding):
-        #return (self.autoencoder_model.decode(encoding).clamp(-1, 1) + 1.0) / 2.0
-        return (encoding.clamp(-1, 1) + 1.0) / 2.0
+        return (self.autoencoder_model.decode(encoding).clamp(-1, 1) + 1.0) / 2.0
+        #return (encoding.clamp(-1, 1) + 1.0) / 2.0
         
     def forward(self, x, t, c=None):
         if c is None:
@@ -39,28 +39,29 @@ class DiffusionModel(pl.LightningModule):
         number_of_images = images.shape[0]
         time_steps = diffusion.create_random_time_steps(number_of_images, self.t_range, self.device)
         noised_images, source_noise = diffusion.diffuse_images(images, time_steps, self.t_range, self.beta_small, self.beta_large)
-        estimated_noise = self.forward(noised_images, time_steps)
+        z_sem = diffusion.encode_semantic(self.unet_autoencoder.encoder, images)
+        estimated_noise = self.forward(noised_images, time_steps, z_sem)
         return F.mse_loss(estimated_noise, source_noise)
 
     def training_step(self, batch, batch_idx):
-        #moments = batch
-        #posterior = DiagonalGaussianDistribution(moments)
-        #encoding = posterior.sample()
-        encoding = batch
+        moments = batch
+        posterior = DiagonalGaussianDistribution(moments)
+        encoding = posterior.sample()
+        #encoding = batch
         loss = self.get_loss(encoding, batch_idx)
         self.log("train/loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        #moments = batch
-        #posterior = DiagonalGaussianDistribution(moments)
-        #encoding = posterior.sample()
-        encoding = batch
+        moments = batch
+        posterior = DiagonalGaussianDistribution(moments)
+        encoding = posterior.sample()
+        #encoding = batch
         loss = self.get_loss(encoding, batch_idx)
         self.log("val/loss", loss)
         if ((batch_idx == 0) and (self.global_rank == 0)):
-            #self.val_batch = posterior.mode()
-            self.val_batch = encoding
+            self.val_batch = posterior.mode()
+            #self.val_batch = encoding
         return
     
     def on_validation_epoch_end(self):

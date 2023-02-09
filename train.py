@@ -10,13 +10,13 @@ import yaml
 # Training hyperparameters
 dataset_choice = "AutoencoderBoosted256x256"
 base_dir = "/work/cseos2g/papapalpi/"
-latent_dataset_path_train =  base_dir + "data/train_float_128x128.npy"
-latent_dataset_path_val =  base_dir + "data/val_float_128x128.npy"
+latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent.npy"
+latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent.npy"
 config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
 
 # Loading parameters
-load_model = False
-load_version_num = 21
+load_model = True
+load_version_num = 27
 
 # Code for optionally loading model
 last_checkpoint = None
