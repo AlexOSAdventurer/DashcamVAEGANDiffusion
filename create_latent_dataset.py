@@ -1,7 +1,7 @@
 import torch
-from data import DiffSet, ImageDataset
+from data import OriginalImageDataset as ImageDataset
 import pytorch_lightning as pl
-from model import AutoencoderKL
+import first_stage_autoencoder
 from torch.utils.data import DataLoader
 import imageio
 import glob
@@ -14,21 +14,16 @@ dataset_choice = "Testing"
 base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
 dataset_path_train = base_dir + "data/train_float_256x256.npy"
 dataset_path_val = base_dir + "data/val_float_256x256.npy"
-new_dataset_path_train =  base_dir + "data/train_float_256x256_latent.npy"
-new_dataset_path_val =  base_dir + "data/val_float_256x256_latent.npy"
+new_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
+new_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
 max_epoch = 10
 batch_size = 32
-config_data = yaml.safe_load(open("autoencoder_kl_256x256x3.yaml"))
 device = 'cuda'
 # Create datasets and data loaders
 train_dataset = ImageDataset(dataset_path_train)
 val_dataset = ImageDataset(dataset_path_val)
 
-autoencoder_model = AutoencoderKL.load_from_checkpoint("autoencoderkl.ckpt", ddconfig=config_data['model']['params']['ddconfig'],
-                 lossconfig=config_data['model']['params']['lossconfig'],
-                 embed_dim=config_data['model']['params']['embed_dim'],
-                 base_learning_rate=config_data['model']['base_learning_rate'])
-
+autoencoder_model = first_stage_autoencoder.generate_pretrained_model()  
 autoencoder_model = autoencoder_model.eval().to(device)
 
 def convertData(dataset, new_path):

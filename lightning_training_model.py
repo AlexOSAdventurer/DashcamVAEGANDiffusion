@@ -24,6 +24,9 @@ class DiffusionModel(pl.LightningModule):
         #self.ddim_model = unet_autoencoder.generate_ddim_model()
         #self.semantic_encoder = unet_autoencoder.generate_semantic_encoder_model()
         #Not used during training, but useful for visualization during validation stage
+        self.generate_first_stage()
+
+    def generate_first_stage(self):
         self.autoencoder_model = first_stage_autoencoder.generate_pretrained_model().eval()
         
     def decode_encoding(self, encoding):
@@ -65,7 +68,7 @@ class DiffusionModel(pl.LightningModule):
         return
     
     def on_validation_epoch_end(self):
-        if ((self.global_rank != 0) or ((self.current_epoch % 5) != 0)):
+        if ((self.global_rank != 0) or ((self.current_epoch % 2) != 0)):
             return
         # Get tensorboard logger
         tb_logger = None
@@ -81,14 +84,18 @@ class DiffusionModel(pl.LightningModule):
         x_t = diffusion.stochastic_encode_process_multiple_images(self.unet_autoencoder, self.val_batch, z_sem, self.t_range, self.beta_small, self.beta_large)
         print("Stochastic encoding done!")
         reconstructed_x_0 = diffusion.denoise_process_multiple_images(self.unet_autoencoder, x_t, z_sem, self.t_range, self.beta_small, self.beta_large)
+        x_t_random = torch.randn_like(x_t)
+        reconstructed_x_0_no_xt = diffusion.denoise_process_multiple_images(self.unet_autoencoder, x_t_random, z_sem, self.t_range, self.beta_small, self.beta_large)
         print("Denoising done!")
         ground_truth_images = self.decode_encoding(self.val_batch)
         reconstructed_images = self.decode_encoding(reconstructed_x_0)
         reconstructed_x_t_images = self.decode_encoding(x_t)
+        reconstructed_images_no_xt = self.decode_encoding(reconstructed_x_0_no_xt)
         print("Decoding done!")
         tb_logger.add_images(f"val/original_encoding", self.val_batch, self.current_epoch)
         tb_logger.add_images(f"val/original_images", ground_truth_images, self.current_epoch)
         tb_logger.add_images(f"val/output_images", reconstructed_images, self.current_epoch)
+        tb_logger.add_images(f"val/output_images_no_xt", reconstructed_images_no_xt, self.current_epoch)
         tb_logger.add_images(f"val/output_encoding", reconstructed_x_0, self.current_epoch)
         tb_logger.add_images(f"val/stochastic_encoding", x_t, self.current_epoch)
         tb_logger.add_images(f"val/stochastic_images", reconstructed_x_t_images, self.current_epoch)

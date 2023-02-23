@@ -9,14 +9,14 @@ import yaml
 
 # Training hyperparameters
 dataset_choice = "AutoencoderBoosted256x256"
-base_dir = "/work/cseos2g/papapalpi/"
-latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent.npy"
-latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent.npy"
+base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
+latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
+latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
 config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
 
 # Loading parameters
 load_model = True
-load_version_num = 27
+load_version_num = 43
 
 # Code for optionally loading model
 last_checkpoint = None
@@ -35,6 +35,7 @@ val_loader = DataLoader(val_dataset, batch_size=2, num_workers=16, shuffle=False
 
 if load_model:
     model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
+    model.generate_first_stage() #Overwrite the old first stage autoencoder
 else:
     model = DiffusionModel(config_data)
 
