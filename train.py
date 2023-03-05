@@ -8,14 +8,14 @@ from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
 # Training hyperparameters
-dataset_choice = "AutoencoderBoosted256x256"
-base_dir = "/work/cseos2g/papapalpi/DeepDriveStuff/bdd100k/images/"
+dataset_choice = "Base1"
+base_dir = "/work/cseos2g/papapalpi/"
 latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
 latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
 config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
 
 # Loading parameters
-load_model = True
+load_model = False
 load_version_num = 43
 
 # Code for optionally loading model

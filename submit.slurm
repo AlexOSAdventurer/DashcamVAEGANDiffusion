@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=DiffusionAutoEncoderCustom_8
+#SBATCH --job-name=DiffusionAutoEncoderBase1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
 #SBATCH --nodes=12

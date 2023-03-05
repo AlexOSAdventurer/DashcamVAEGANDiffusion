@@ -24,7 +24,7 @@ def diffuse_images(images, time_steps, max_t, beta_small, beta_large):
     return noised_images, source_noise
 
 def estimate_noise(ddim_model, noised_images, time_steps, z_sem):
-    return ddim_model.forward(x=noised_images, t=time_steps, cond=z_sem).pred
+    return ddim_model.forward(x=noised_images, t=time_steps, cond=z_sem)
     
 def encode_semantic(semantic_encoder, images):
     return semantic_encoder.forward(images)
