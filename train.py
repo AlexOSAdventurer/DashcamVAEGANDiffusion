@@ -1,5 +1,5 @@
 import torch
-from data import ImageDataset
+from data import ImageDataset, OriginalImageDataset
 import pytorch_lightning as pl
 from lightning_training_model import DiffusionModel
 from torch.utils.data import DataLoader
@@ -8,15 +8,20 @@ from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
 # Training hyperparameters
-dataset_choice = "Base1"
+dataset_choice = "IndependentStudyPrelims"
 base_dir = "/work/cseos2g/papapalpi/"
-latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
-latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
+#latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
+#latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
+#full_dataset_path_train =  base_dir + "data/train_float_256x256.npy"
+#full_dataset_path_val =  base_dir + "data/val_float_256x256.npy"
 config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
+base_dir = config_data['data']['base_dir']
+dataset_path_train = base_dir + config_data['data']['train']
+dataset_path_val = base_dir + config_data['data']['val']
 
 # Loading parameters
 load_model = False
-load_version_num = 43
+load_version_num = 1
 
 # Code for optionally loading model
 last_checkpoint = None
@@ -26,12 +31,14 @@ if load_model:
         f"./lightning_logs/{dataset_choice}/version_{load_version_num}/checkpoints/*.ckpt"
     )[-1]
 
+dataset_type = ImageDataset if config_data['model']['first_stage_needed'] else OriginalImageDataset
+
 # Create datasets and data loaders
-train_dataset = ImageDataset(latent_dataset_path_train)
-val_dataset = ImageDataset(latent_dataset_path_val)
+train_dataset = dataset_type(dataset_path_train)
+val_dataset = dataset_type(dataset_path_val)
 
 train_loader = DataLoader(train_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=2, num_workers=16, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=1, num_workers=16, shuffle=False)
 
 if load_model:
     model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
@@ -75,7 +82,8 @@ cli = LightningCLI(
         save_config_overwrite=True,
         trainer_defaults=dict(
             accelerator="gpu",
-            max_epochs=1000,
+            max_epochs=4000,
+            precision=16,
             strategy="ddp",
             logger=tb_logger
         ),

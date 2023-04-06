@@ -13,7 +13,7 @@ def Downsample(x):
     return F.avg_pool2d(x, kernel_size=2, stride=2)
     
 def dropout():
-    return torch.nn.Identity()
+    return torch.nn.Dropout(p=0.1)
     
 def skip_connection(input_channels, output_channels):
     return torch.nn.Identity() if (input_channels == output_channels) else conv_fc(input_channels, output_channels)
@@ -32,6 +32,11 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     args = timesteps[:, None].float() * freqs[None]
     embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
     return embedding
+    
+def zero_module(module):
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
 
 class UNetBlock(torch.nn.Module):
     def __init__(self, input_channels, output_channels):
@@ -91,8 +96,45 @@ class UNetBlockConditional(torch.nn.Module):
         skipped = self.skip_connection(x)
         return final_point + skipped
 
+class AttentionBlock(torch.nn.Module):
+    def __init__(self, channels, num_heads=1):
+        super().__init__()
+        self.channels = channels
+        self.num_heads = num_heads
+        
+        self.norm = UNetLayerNormalization(channels)
+        self.qkv = conv_fc(channels, channels * 3)
+        self.attention = QKVAttentionDiffAE(self.num_heads)
+
+        self.proj_out = zero_module(conv_fc(channels, channels))
+
+    def forward(self, x):
+        b, c, *spatial = x.shape
+        qkv = self.qkv(self.norm(x)).reshape(b, c * 3, -1)
+        h = self.attention(qkv).reshape(b, c, *spatial)
+        h = self.proj_out(h)
+        return x + h
+        
+class QKVAttentionDiffAE(torch.nn.Module):
+    def __init__(self, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+
+    def forward(self, qkv):
+        batch_size, width, length = qkv.shape
+        assert width % (3 * self.num_heads) == 0
+        ch = width // (3 * self.num_heads)
+        q, k, v = qkv.reshape(batch_size * self.num_heads, ch * 3, length).split(ch,
+                                                                       dim=1)
+        scale = 1 / math.sqrt(math.sqrt(ch)) # Scale is ch^0.25, not ch^0.5. Not sure why, probably has to do with some literature I am not familiar with
+        # My understanding is that this stuff is verbatim from Attention is all you need
+        weight = torch.einsum("bct,bcs->bts", q * scale, k * scale)
+        weight = torch.softmax(weight, dim=-1)
+        a = torch.einsum("bts,bcs->bct", weight, v)
+        return a.reshape(batch_size, -1, length)
+
 class UNetBlockGroup(torch.nn.Module):
-    def __init__(self, input_channels, output_channels, num_res_blocks, upsample=False, upsample_target_channels = None, downsample=False, conditional=False):
+    def __init__(self, input_channels, output_channels, num_res_blocks, upsample=False, upsample_target_channels = None, downsample=False, conditional=False, num_heads=None):
         super().__init__()
         block_type = UNetBlockConditional if conditional else UNetBlock
         self.block_list = torch.nn.ModuleList([])
@@ -104,15 +146,20 @@ class UNetBlockGroup(torch.nn.Module):
         self.downsample = downsample
         self.conditional = conditional
         self.block_list.append(block_type(input_channels, output_channels))
-        for i in range(self.num_res_blocks - 1):
+        for i in range(self.num_res_blocks):
             self.block_list.append(block_type(output_channels, output_channels))
+            if (num_heads is not None):
+                self.block_list.append(AttentionBlock(output_channels, num_heads))
         if upsample:
             self.upsample_conv = conv_nd(self.output_channels, self.upsample_target_channels)
         
     def forward(self, x, t = None, z_sem = None, return_unscaled_output=False):
         if self.conditional:
             for module in self.block_list:
-                x = module(x, t, z_sem)
+                if isinstance(module, AttentionBlock):
+                    x = module(x)
+                else:
+                    x = module(x, t, z_sem)
         else:
             for module in self.block_list:
                 x = module(x)
@@ -142,16 +189,21 @@ class UNetEncoder(torch.nn.Module):
         self.block_list_channels_mult = [1, 2, 4, 8, 8]
         self.latent_space = 512
         self.num_res_blocks = 2
+        self.attention_heads = [16]
+        self.attention_resolutions = [16]
         
         self.firstSide = torch.nn.Sequential(
             conv_nd(self.input_channels, self.block_list_base_channels)
         )
         
+        current_resolution = self.input_size
         previous_channels = self.block_list_base_channels
         for entry in self.block_list_channels_mult:
             current_channels = self.block_list_base_channels * entry
-            self.block_list.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=False, downsample=True, conditional=False))
+            current_heads = self.attention_heads[self.attention_resolutions.index(current_resolution)] if current_resolution in self.attention_resolutions else None
+            self.block_list.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=False, downsample=True, conditional=False, num_heads=current_heads))
             previous_channels = current_channels
+            current_resolution = current_resolution // 2
         
         self.final_output_module = torch.nn.Sequential(
             UNetLayerNormalization(previous_channels),
@@ -176,6 +228,9 @@ class UNet(torch.nn.Module):
         self.block_list_base_channels = 64
         self.block_list_channels_mult = [1, 2, 4, 8]
         self.num_res_blocks = 2
+        self.attention_heads = [16]
+        self.attention_resolutions = [16]
+        
         self.firstSide = torch.nn.Sequential(
             conv_nd(self.input_channels, self.block_list_base_channels)
         )
@@ -185,28 +240,32 @@ class UNet(torch.nn.Module):
         self.downSide = torch.nn.ModuleList([])
         self.upSide = torch.nn.ModuleList([])
         
+        current_resolution = self.input_size
         previous_channels = self.block_list_base_channels
         for entry in self.block_list_channels_mult:
             current_channels = self.block_list_base_channels * entry
-            self.downSide.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=False, downsample=True, conditional=True))
+            current_heads = self.attention_heads[self.attention_resolutions.index(current_resolution)] if current_resolution in self.attention_resolutions else None
+            self.downSide.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=False, downsample=True, conditional=True, num_heads=current_heads))
             previous_channels = current_channels
-        self.middleModule = UNetBlockGroup(previous_channels, previous_channels * 2, self.num_res_blocks, upsample=True, upsample_target_channels = previous_channels, downsample=False, conditional=True)
+            current_resolution = current_resolution // 2
+        current_heads = self.attention_heads[self.attention_resolutions.index(current_resolution)] if current_resolution in self.attention_resolutions else None
+        self.middleModule = UNetBlockGroup(previous_channels, previous_channels * 2, self.num_res_blocks, upsample=True, upsample_target_channels = previous_channels, downsample=False, conditional=True, num_heads=current_heads)
+        current_resolution = current_resolution * 2
         previous_channels = previous_channels * 2
         block_list_channels_mult_reversed = self.block_list_channels_mult[::-1]
         for i in range(len(block_list_channels_mult_reversed) - 1):
             entry = block_list_channels_mult_reversed[i]
             next_entry = block_list_channels_mult_reversed[i + 1]
             current_channels = self.block_list_base_channels * entry
+            current_heads = self.attention_heads[self.attention_resolutions.index(current_resolution)] if current_resolution in self.attention_resolutions else None
             next_channels = self.block_list_base_channels * next_entry
-            self.upSide.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=True, upsample_target_channels = next_channels, downsample=False, conditional=True))
-            previous_channels = current_channels
-        self.upSide.append(UNetBlockGroup(previous_channels, self.block_list_base_channels, self.num_res_blocks, upsample=False, downsample=False, conditional=True))
+            self.upSide.append(UNetBlockGroup(previous_channels, current_channels, self.num_res_blocks, upsample=True, upsample_target_channels = next_channels, downsample=False, conditional=True, num_heads=current_heads))
+            current_resolution = current_resolution * 2
+            previous_channels = next_channels * 2
+        current_heads = self.attention_heads[self.attention_resolutions.index(current_resolution)] if current_resolution in self.attention_resolutions else None
+        self.upSide.append(UNetBlockGroup(previous_channels, self.block_list_base_channels, self.num_res_blocks, upsample=False, downsample=False, conditional=True, num_heads=current_heads))
     
     def forward(self, x, t=None, cond=None):
-        if t is None:
-            t = torch.randn((x.shape[0])).to(x.device)
-        if cond is None:
-            cond = torch.randn((x.shape[0], 512)).to(x.device)
         x = self.firstSide(x)
         intermediate_outputs = []
         for module in self.downSide:
