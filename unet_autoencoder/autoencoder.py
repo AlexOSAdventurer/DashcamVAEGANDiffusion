@@ -24,6 +24,9 @@ def conv_nd(input_channels, output_channels):
 def conv_fc(input_channels, output_channels):
     return torch.nn.Conv2d(input_channels, output_channels, kernel_size=1, padding=0)
     
+def activation():
+    return torch.nn.SiLU()
+    
 def timestep_embedding(timesteps, dim, max_period=10000):
     half = dim // 2
     freqs = torch.exp(-math.log(max_period) *
@@ -45,10 +48,10 @@ class UNetBlock(torch.nn.Module):
         self.output_channels = output_channels
         self.block_list = torch.nn.Sequential(
             UNetLayerNormalization(input_channels),
-            torch.nn.SiLU(),
+            activation(),
             conv_nd(input_channels, output_channels),
             UNetLayerNormalization(output_channels),
-            torch.nn.SiLU(),
+            activation(),
             dropout(),
             conv_nd(output_channels, output_channels)
         )
@@ -65,20 +68,20 @@ class UNetBlockConditional(torch.nn.Module):
         self.semantic_latent_channels = 512
         self.timestep_dims = 512
         self.semantic_affine = torch.nn.Sequential(
-            torch.nn.SiLU(),
+            activation(),
             torch.nn.Linear(self.semantic_latent_channels, output_channels)
         )
         self.timestep_mlp = torch.nn.Sequential(
-            torch.nn.SiLU(),
+            activation(),
             torch.nn.Linear(self.timestep_dims, 2 * output_channels)
         )
         self.block_list_1 = torch.nn.Sequential(
             UNetLayerNormalization(input_channels),
-            torch.nn.SiLU(),
+            activation(),
             conv_nd(input_channels, output_channels),
             UNetLayerNormalization(output_channels))
         self.block_list_2 = torch.nn.Sequential(
-            torch.nn.SiLU(),
+            activation(),
             dropout(),
             conv_nd(output_channels, output_channels)
         )
@@ -207,7 +210,7 @@ class UNetEncoder(torch.nn.Module):
         
         self.final_output_module = torch.nn.Sequential(
             UNetLayerNormalization(previous_channels),
-            torch.nn.SiLU(),
+            activation(),
             torch.nn.AdaptiveAvgPool2d((1,1)),
             conv_fc(previous_channels, self.latent_space),
             torch.nn.Flatten()
@@ -287,3 +290,75 @@ class Autoencoder(torch.nn.Module):
     
     def forward(self, x, t, cond):
         return self.unet(x, t, cond)
+        
+class DDIM(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mlp_skip_net = MLPSkipNet()
+        
+    def forward(self, x, t):
+        return self.mlp_skip_net(x, t)
+
+class MLPSkipNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.num_channels = 512
+        self.num_hidden_channels = 2048
+        self.num_time_layers = 2
+        self.num_time_emb_channels = 64
+        self.num_condition_bias = 1
+        self.num_regular_layers = 10
+        
+        layers = []
+        in_channels = self.num_time_emb_channels
+        out_channels = self.num_channels
+        for i in range(self.num_time_layers):
+            layers.append(nn.Linear(in_channels, out_channels))
+            if (i != (self.num_time_layers - 1)):
+                layers.append(activation())
+            in_channels = out_channels
+        self.time_embed = torch.nn.Sequential(*layers)
+        
+        self.regular_layers = torch.nn.ModuleList([])
+        in_channels = self.num_channels
+        out_channels = self.num_hidden_channels
+        for i in range(self.num_layers):
+            if (i == (self.num_layers - 1)):
+                self.layers.append(MLPBlock(in_channels, self.num_channels, norm=False, cond=False, act=False, cond_channels=self.num_channels, cond_bias=self.num_condition_bias))
+            else:
+                self.layers.append(MLPBlock(in_channels, out_channels, norm=True, cond=True, act=True))
+            in_channels = out_channels + self.num_channels
+    
+    def forward(self, x, t):
+        t = timestep_embedding(t, self.num_time_emb_channels)
+        t_cond = self.time_embed(t)
+        h = x
+        for i in range(self.num_regular_layers):
+            if (i != 0):
+                h = torch.cat([h, x], dim=1)
+            h = self.layers[i].forward(h, cond=t_cond)
+        return h
+        
+class MLPBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, norm, cond, act, cond_channels=None, cond_bias=None):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.norm = torch.nn.LayerNorm(out_channels) if norm else torch.nn.Identity()
+        self.act = activation() if act else torch.nn.Identity()
+        self.use_cond = cond
+        self.cond_channels = cond_channels
+        self.cond_bias = cond_bias
+        
+        self.linear = torch.nn.Linear(self.in_channels, self.out_channels)
+        if self.use_cond:
+            self.linear_emb = torch.nn.Linear(self.cond_channels, self,out_channels)
+            self.cond_layers = torch.nn.Sequential(self.act, self.linear_emb)
+            
+    def forward(self, x, cond=None):
+        x = self.linear(x)
+        if (self.use_cond):
+            cond = self.cond_layers(cond)
+            x = x * (self.cond_bias + cond)
+        x = self.norm(x)
+        x = self.act(x)
+        return x
