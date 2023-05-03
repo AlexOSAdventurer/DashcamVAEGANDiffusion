@@ -1,6 +1,6 @@
 model:
-  batch_size: 24
-  first_stage_needed: True
+  batch_size: 2
+  first_stage_needed: False
   base_learning_rate: 0.0001
   in_size: 4096
   in_size_sqrt: 64
@@ -10,5 +10,5 @@ model:
   beta_large: 0.02
 data:
   base_dir: /work/cseos2g/papapalpi/
-  train: data/train_float_256x256_latent_2.npy
-  val: data/val_float_256x256_latent_2.npy
+  train: data/train_float_256x256.npy
+  val: data/val_float_256x256.npy

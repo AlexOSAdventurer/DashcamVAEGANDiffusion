@@ -1,0 +1,9 @@
+diffae:
+  diffae_config: diffusion_model_64x64x3_4_attn.yaml
+  checkpoint_file: saved_diffusion_models/4_attn/model.ckpt
+model:
+  batch_size: 64
+data:
+  base_dir: /work/cseos2g/papapalpi/
+  train: data/train_float_256x256_latent_2.npy
+  val: data/val_float_256x256_latent_2.npy

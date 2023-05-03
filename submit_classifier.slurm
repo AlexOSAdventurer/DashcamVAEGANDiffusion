@@ -1,12 +1,13 @@
 #!/bin/bash -l
-#SBATCH --job-name=BergerAblation_1to4_Channels_64_8_Attn
+#SBATCH --job-name=BergerClassifier_largest_model_3
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=20
-#SBATCH --nodes=3
+#SBATCH --nodes=1
 #SBATCH --mem=128gb
-#SBATCH --time=48:00:00
+#SBATCH --time=8:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
+#SBATCH --constraint=gpu_32gb
 #SBATCH --output=/work/cseos2g/papapalpi/logs/%x-%j.out
 
 
@@ -28,4 +29,4 @@ conda activate your_env_name
 #--data_path path/to/dataset
 
 export PYTHONPATH="/home/cseos2g/papapalpi/.local/lib/python3.8/site-packages/:$PYTHONPATH"
-srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train.py fit --trainer.num_nodes 3  --trainer.gpus 2
+srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train_classifier.py fit --trainer.num_nodes 1  --trainer.gpus 2

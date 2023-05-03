@@ -1,5 +1,6 @@
 import os
 import sys
+from . import autoencoder
 
 def add_module_to_path(path_to_add=__path__[0]):
     sys.path.append(path_to_add)
@@ -36,6 +37,11 @@ def generate_model():
     
     return model
 
+def generate_ddim_model():
+    model = autoencoder.DDIM()
+    return model
+
+__all__ = ['generate_model', 'generate_ddim_model']
+
 remove_module_from_path()
 
-__all__ = ['generate_model']

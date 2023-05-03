@@ -21,7 +21,11 @@ class DiffusionModel(pl.LightningModule):
         self.in_size_sqrt = config["model"]["in_size_sqrt"]
         self.img_depth = config["model"]["img_depth"]
         self.config = config
-        self.unet_autoencoder = unet_autoencoder.generate_model()
+        if "unet_config" in config["model"]:
+            print(f"UNET CONFIG FILE: {config['model']['unet_config']}")
+            self.unet_autoencoder = unet_autoencoder.generate_model(config["model"]["unet_config"])
+        else:
+            self.unet_autoencoder = unet_autoencoder.generate_model()
         #self.ddim_model = unet_autoencoder.generate_ddim_model()
         #self.semantic_encoder = unet_autoencoder.generate_semantic_encoder_model()
         #Not used during training, but useful for visualization during validation stage
@@ -30,6 +34,9 @@ class DiffusionModel(pl.LightningModule):
     def generate_first_stage(self):
         if self.first_stage_needed:
             self.autoencoder_model = first_stage_autoencoder.generate_pretrained_model().eval()
+
+    def create_distribution(self, batch):
+        return self.autoencoder_model.encode_raw(batch)
 
     def fetch_encoding(self, batch, sample):
         if self.first_stage_needed:
@@ -40,18 +47,18 @@ class DiffusionModel(pl.LightningModule):
                 return posterior.mode()
         else:
             return batch
-        
+
     def decode_encoding(self, encoding):
         res = encoding
         if self.first_stage_needed:
             res = self.autoencoder_model.decode(encoding)
         return (res.clamp(-1, 1) + 1.0) / 2.0
-        
+
     def forward(self, x, t, c=None):
         if c is None:
             c = diffusion.encode_semantic(self.unet_autoencoder.encoder, x)
         return diffusion.estimate_noise(self.unet_autoencoder, x, t, c)
-        
+
     def get_loss(self, images, batch_idx):
         number_of_images = images.shape[0]
         time_steps = diffusion.create_random_time_steps(number_of_images, self.t_range, self.device)
@@ -73,9 +80,9 @@ class DiffusionModel(pl.LightningModule):
         if ((batch_idx == 0) and (self.global_rank == 0)):
             self.val_batch = encoding
         return
-    
+
     def on_validation_epoch_end(self):
-        if ((self.global_rank != 0) or ((self.current_epoch % 3) != 1)):
+        if ((self.global_rank != 0) or ((self.current_epoch % 50) != 25)):
             return
         # Get tensorboard logger
         tb_logger = None

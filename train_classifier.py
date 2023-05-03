@@ -1,23 +1,21 @@
 import torch
-from data import ImageDataset, OriginalImageDataset
+from data import ImageLabelDataset
 import pytorch_lightning as pl
-from lightning_training_model import DiffusionModel
+from lightning_training_classifier_model import ClsModel
 from torch.utils.data import DataLoader
 import glob
 from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
-# Training hyperparameters
-dataset_choice = "BergerAblation_1to4_Channels_64_8_Attn"
+filename = "cls_diffusion_model_64x64x3_largest_model.yaml"
+dataset_choice = f"RealCLS_{filename}"
 base_dir = "/work/cseos2g/papapalpi/"
-#latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
-#latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
-#full_dataset_path_train =  base_dir + "data/train_float_256x256.npy"
-#full_dataset_path_val =  base_dir + "data/val_float_256x256.npy"
-config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
+config_data = yaml.safe_load(open(filename))
 base_dir = config_data['data']['base_dir']
 dataset_path_train = base_dir + config_data['data']['train']
 dataset_path_val = base_dir + config_data['data']['val']
+dataset_path_train_labels = base_dir + config_data['data']['train_labels']
+dataset_path_val_labels = base_dir + config_data['data']['val_labels']
 
 # Loading parameters
 load_model = False
@@ -31,20 +29,19 @@ if load_model:
         f"./lightning_logs/{dataset_choice}/version_{load_version_num}/checkpoints/*.ckpt"
     )[-1]
 
-dataset_type = ImageDataset if config_data['model']['first_stage_needed'] else OriginalImageDataset
+dataset_type = ImageLabelDataset
 
 # Create datasets and data loaders
-train_dataset = dataset_type(dataset_path_train)
-val_dataset = dataset_type(dataset_path_val)
+train_dataset = dataset_type(dataset_path_train, dataset_path_train_labels)
+val_dataset = dataset_type(dataset_path_val, dataset_path_val_labels)
 
 train_loader = DataLoader(train_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=False)
 
 if load_model:
-    model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
-    model.generate_first_stage() #Overwrite the old first stage autoencoder
+    model = ClsModel.load_from_checkpoint(last_checkpoint, config=config_data)
 else:
-    model = DiffusionModel(config_data)
+    model = ClsModel(config_data)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(
@@ -75,14 +72,14 @@ class ImageDataModule(pl.LightningDataModule):
         return val_loader
 
 cli = LightningCLI(
-        description="PyTorch Diffusiom Model with Autoencoder Boost",
+        description="PyTorch Latent Classifier",
         model_class=getModel,
         datamodule_class=ImageDataModule,
         seed_everything_default=123,
         save_config_overwrite=True,
         trainer_defaults=dict(
             accelerator="gpu",
-            max_epochs=500,
+            max_epochs=200,
             precision=16,
             strategy="ddp",
             logger=tb_logger

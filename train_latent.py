@@ -1,20 +1,18 @@
 import torch
 from data import ImageDataset, OriginalImageDataset
 import pytorch_lightning as pl
-from lightning_training_model import DiffusionModel
+from lightning_training_latent_model import LatentModel
 from torch.utils.data import DataLoader
 import glob
 from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
+filename = "latent_diffusion_model_64x64x3_no_attn.yaml"
 # Training hyperparameters
-dataset_choice = "BergerAblation_1to4_Channels_64_8_Attn"
+#dataset_choice = "BergerAblation_1to4_Channels_64_8_Attn_DDI"
+dataset_choice = f"LatentDDIM_{filename}"
 base_dir = "/work/cseos2g/papapalpi/"
-#latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
-#latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
-#full_dataset_path_train =  base_dir + "data/train_float_256x256.npy"
-#full_dataset_path_val =  base_dir + "data/val_float_256x256.npy"
-config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
+config_data = yaml.safe_load(open(filename))
 base_dir = config_data['data']['base_dir']
 dataset_path_train = base_dir + config_data['data']['train']
 dataset_path_val = base_dir + config_data['data']['val']
@@ -31,7 +29,7 @@ if load_model:
         f"./lightning_logs/{dataset_choice}/version_{load_version_num}/checkpoints/*.ckpt"
     )[-1]
 
-dataset_type = ImageDataset if config_data['model']['first_stage_needed'] else OriginalImageDataset
+dataset_type = ImageDataset
 
 # Create datasets and data loaders
 train_dataset = dataset_type(dataset_path_train)
@@ -41,10 +39,9 @@ train_loader = DataLoader(train_dataset, batch_size=config_data["model"]["batch_
 val_loader = DataLoader(val_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=False)
 
 if load_model:
-    model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
-    model.generate_first_stage() #Overwrite the old first stage autoencoder
+    model = LatentModel.load_from_checkpoint(last_checkpoint, config=config_data)
 else:
-    model = DiffusionModel(config_data)
+    model = LatentModel(config_data)
 
 # Load Trainer model
 tb_logger = pl.loggers.TensorBoardLogger(
@@ -75,7 +72,7 @@ class ImageDataModule(pl.LightningDataModule):
         return val_loader
 
 cli = LightningCLI(
-        description="PyTorch Diffusiom Model with Autoencoder Boost",
+        description="PyTorch Latent Diffusiom Model with Autoencoder Boost",
         model_class=getModel,
         datamodule_class=ImageDataModule,
         seed_everything_default=123,

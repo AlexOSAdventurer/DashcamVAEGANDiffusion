@@ -1,0 +1,11 @@
+diffae:
+  diffae_config: diffusion_model_64x64x3_no_attn.yaml
+  checkpoint_file: saved_diffusion_models/no_attn/model.ckpt
+model:
+  batch_size: 256
+data:
+  base_dir: /work/cseos2g/papapalpi/
+  train: data/images_labels/train_images_64x64.npy
+  val: data/images_labels/val_images_64x64.npy
+  train_labels: data/images_labels/train_labels.npy
+  val_labels: data/images_labels/val_labels.npy

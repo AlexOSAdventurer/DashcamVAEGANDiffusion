@@ -23,7 +23,7 @@ device = 'cuda'
 train_dataset = ImageDataset(dataset_path_train)
 val_dataset = ImageDataset(dataset_path_val)
 
-autoencoder_model = first_stage_autoencoder.generate_pretrained_model()  
+autoencoder_model = first_stage_autoencoder.generate_pretrained_model()
 autoencoder_model = autoencoder_model.eval().to(device)
 
 def convertData(dataset, new_path):
@@ -35,7 +35,7 @@ def convertData(dataset, new_path):
             result = autoencoder_model.encode_raw(data).to('cpu')
             output_memmap[(i * batch_size):((i * batch_size) + data.shape[0])] = result.numpy()
             print(i)
-        
+
 print("Train")
 convertData(train_dataset, new_dataset_path_train)
 print("Val")
