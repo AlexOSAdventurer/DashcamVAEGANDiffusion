@@ -7,7 +7,7 @@ import glob
 from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
-filename = "latent_diffusion_model_64x64x3_no_attn.yaml"
+filename = "config_files/latent_diffusion_model_64x64x3_our_largest_model.yaml"
 # Training hyperparameters
 #dataset_choice = "BergerAblation_1to4_Channels_64_8_Attn_DDI"
 dataset_choice = f"LatentDDIM_{filename}"

@@ -7,7 +7,7 @@ import glob
 from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
-filename = "cls_diffusion_model_64x64x3_largest_model.yaml"
+filename = "config_files/cls_diffusion_model_64x64x3_our_largest_model.yaml"
 dataset_choice = f"RealCLS_{filename}"
 base_dir = "/work/cseos2g/papapalpi/"
 config_data = yaml.safe_load(open(filename))

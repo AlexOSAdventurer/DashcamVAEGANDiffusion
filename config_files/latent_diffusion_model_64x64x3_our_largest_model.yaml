@@ -1,0 +1,9 @@
+diffae:
+  diffae_config: config_files/diffusion_model_64x64x3_largest_model.yaml
+  checkpoint_file: /work/cseos2g/papapalpi/data/models/DashcamDiffusionAutoencoder64x64New/saved_diffusion_models/our_largest_model/model.ckpt
+model:
+  batch_size: 64
+data:
+  base_dir: /work/cseos2g/papapalpi/
+  train: data/train_float_256x256_latent_2.npy
+  val: data/val_float_256x256_latent_2.npy

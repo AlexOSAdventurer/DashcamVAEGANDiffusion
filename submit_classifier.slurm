@@ -1,13 +1,12 @@
 #!/bin/bash -l
-#SBATCH --job-name=BergerClassifier_largest_model_3
+#SBATCH --job-name=Summer_Classifier_1
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=20
 #SBATCH --nodes=1
 #SBATCH --mem=128gb
-#SBATCH --time=8:00:00
+#SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
-#SBATCH --constraint=gpu_32gb
 #SBATCH --output=/work/cseos2g/papapalpi/logs/%x-%j.out
 
 
@@ -29,4 +28,5 @@ conda activate your_env_name
 #--data_path path/to/dataset
 
 export PYTHONPATH="/home/cseos2g/papapalpi/.local/lib/python3.8/site-packages/:$PYTHONPATH"
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train_classifier.py fit --trainer.num_nodes 1  --trainer.gpus 2

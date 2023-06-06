@@ -8,20 +8,21 @@ from pytorch_lightning.utilities.cli import LightningCLI
 import yaml
 
 # Training hyperparameters
-dataset_choice = "BergerAblation_1to4_Channels_64_8_Attn"
 base_dir = "/work/cseos2g/papapalpi/"
 #latent_dataset_path_train =  base_dir + "data/train_float_256x256_latent_2.npy"
 #latent_dataset_path_val =  base_dir + "data/val_float_256x256_latent_2.npy"
 #full_dataset_path_train =  base_dir + "data/train_float_256x256.npy"
 #full_dataset_path_val =  base_dir + "data/val_float_256x256.npy"
-config_data = yaml.safe_load(open("diffusion_model_64x64x3.yaml"))
+config_file = "config_files/diffusion_model_64x64x3_largest_model.yaml"
+config_data = yaml.safe_load(open(config_file))
+dataset_choice = f"{config_file}"
 base_dir = config_data['data']['base_dir']
 dataset_path_train = base_dir + config_data['data']['train']
 dataset_path_val = base_dir + config_data['data']['val']
 
 # Loading parameters
-load_model = False
-load_version_num = 17
+load_model = True
+load_version_num = 10
 
 # Code for optionally loading model
 last_checkpoint = None
@@ -38,7 +39,7 @@ train_dataset = dataset_type(dataset_path_train)
 val_dataset = dataset_type(dataset_path_val)
 
 train_loader = DataLoader(train_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=config_data["model"]["batch_size"], num_workers=16, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=32, num_workers=16, shuffle=False)
 
 if load_model:
     model = DiffusionModel.load_from_checkpoint(last_checkpoint, config=config_data)
@@ -82,7 +83,7 @@ cli = LightningCLI(
         save_config_overwrite=True,
         trainer_defaults=dict(
             accelerator="gpu",
-            max_epochs=500,
+            max_epochs=5000,
             precision=16,
             strategy="ddp",
             logger=tb_logger

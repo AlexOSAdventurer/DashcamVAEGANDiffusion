@@ -1,10 +1,10 @@
 #!/bin/bash -l
-#SBATCH --job-name=BergerDDIMLatent_no_attn_2
+#SBATCH --job-name=Summer_Latent_2
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=20
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --mem=128gb
-#SBATCH --time=48:00:00
+#SBATCH --time=96:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
 #SBATCH --output=/work/cseos2g/papapalpi/logs/%x-%j.out
@@ -28,4 +28,5 @@ conda activate your_env_name
 #--data_path path/to/dataset
 
 export PYTHONPATH="/home/cseos2g/papapalpi/.local/lib/python3.8/site-packages/:$PYTHONPATH"
-srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train_latent.py fit --trainer.num_nodes 2  --trainer.gpus 2
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+srun singularity exec --nv $WORK/torchgan_container_old_new_latest.sif python3 train_latent.py fit --trainer.num_nodes 1  --trainer.gpus 2
